@@ -1,0 +1,82 @@
+name: Build & Release (manual)
+
+# Manually-triggered build that packages the macOS app and publishes the .dmg(s)
+# to a GitHub Release in THIS repo. Run it from the Actions tab ("Run workflow")
+# and provide the release tag. The original main.yml (push-to-master, official
+# publish) is left untouched.
+#
+# Code signing is OPTIONAL. If the following repo secrets are set, the build is
+# signed with that certificate; otherwise an unsigned build is produced (users
+# will need to right-click -> Open the first time):
+#   MAC_CSC_LINK          base64 of a Developer ID Application .p12 certificate
+#   MAC_CSC_KEY_PASSWORD  password for that .p12
+# (To also notarize, set APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+#  and flip "notarize" to true in packages/server/scripts/electron-builder-config.js.)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to (e.g. v1.9.9)"
+        required: true
+      prerelease:
+        description: "Mark this release as a pre-release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Setup Node.js 20.11
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.11"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build UI
+        run: npm run build-ui
+
+      - name: Build & package (x64 + arm64 dmg)
+        working-directory: packages/server
+        env:
+          # Optional signing — empty when the secrets are not configured
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # Only auto-discover/sign when a certificate is provided; otherwise skip signing
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CSC_LINK != '' }}
+        run: |
+          npm run build
+          npx electron-builder build --mac dmg --x64 --arm64 \
+            --publish never \
+            --config ./scripts/electron-builder-config.js
+
+      - name: List build output
+        run: ls -lh packages/server/releases/*.dmg
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          name: ${{ github.event.inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: packages/server/releases/*.dmg
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
