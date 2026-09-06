@@ -10,6 +10,7 @@ import { transformFindMyItemToDevice } from "@server/api/lib/findmy/utils";
 import { FindMyKeyManager } from "@server/api/lib/findmy/FindMyKeyManager";
 import { decryptCacheBuffer } from "@server/api/lib/findmy/decrypt/cache";
 import { readFriendLocations, RawFriendLocation } from "@server/api/lib/findmy/decrypt/localStorageReader";
+import { readSearchPartyFriendLocations } from "@server/api/lib/findmy/decrypt/searchPartyReader";
 import { readFmfContacts } from "@server/api/lib/findmy/decrypt/fmfReader";
 
 export class FindMyInterface {
@@ -165,18 +166,29 @@ export class FindMyInterface {
      * with the FMF cache (display names). Returns items in the legacy API shape.
      */
     static async readFriendsFromCache(): Promise<FindMyLocationItem[]> {
+        let rawLocations: RawFriendLocation[] = [];
+
         const localStorageKey = FindMyKeyManager.loadLocalStorageKey();
         if (!localStorageKey) {
             Server().logger.debug("FindMy LocalStorage key not imported — cannot read friend locations.");
-            return [];
-        }
-
-        if (!fs.existsSync(FileSystem.findMyLocalStorageDbPath)) {
+        } else if (!fs.existsSync(FileSystem.findMyLocalStorageDbPath)) {
             Server().logger.debug(`FindMy LocalStorage.db not found at ${FileSystem.findMyLocalStorageDbPath}`);
-            return [];
+        } else {
+            rawLocations = readFriendLocations(localStorageKey);
         }
 
-        const rawLocations = readFriendLocations(localStorageKey);
+        // Some macOS 14.4+ builds keep friend coordinates only in the searchpartyd
+        // secure-location store (LocalStorage.db has no `secureLocations` table).
+        if (rawLocations.length === 0) {
+            const searchPartyKey = FindMyKeyManager.loadSearchPartyKey();
+            if (searchPartyKey) {
+                try {
+                    rawLocations = await readSearchPartyFriendLocations(searchPartyKey);
+                } catch (ex: any) {
+                    Server().logger.debug(`Failed to read searchpartyd friend locations: ${String(ex)}`);
+                }
+            }
+        }
 
         // Best-effort: pull friend display names from the FMF cache
         let names: Record<string, string> = {};

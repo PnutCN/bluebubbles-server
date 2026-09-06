@@ -127,6 +127,10 @@ export class FileSystem {
 
     public static findMyLocalStorageDbPath = path.join(FileSystem.findMyLocalStorageDir, "LocalStorage.db");
 
+    // searchpartyd secure-location store: holds friend coordinates on macOS builds where
+    // LocalStorage.db has no `secureLocations` table (observed on 14.8.x)
+    public static searchPartyDir = path.join(userHomeDir(), "Library", "com.apple.icloud.searchpartyd");
+
     // Where BlueBubbles stores the user-imported Find My decryption keys
     public static findMyKeysDir = path.join(FileSystem.baseDir, "FindMyKeys");
 

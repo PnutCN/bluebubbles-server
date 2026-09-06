@@ -19,7 +19,7 @@ export type RawFriendLocation = {
     location: Record<string, any>;
 };
 
-const stripPadding = (id: string): string => (id ?? "").replace(/~+$/, "");
+export const stripPadding = (id: string): string => (id ?? "").replace(/~+$/, "");
 
 /**
  * Decrypt LocalStorage.db to a temporary plaintext SQLite file, run `fn` against it,
