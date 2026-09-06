@@ -141,6 +141,8 @@ export type FindMyLocationItem = {
     last_updated: number;
     is_locating_in_progress: boolean;
     status: "legacy" | "live" | "shallow";
+    /** Base64-encoded contact photo, when the handle matches a contact with an image. */
+    avatar?: string | null;
 };
 
 export type FindMySafeLocation = {

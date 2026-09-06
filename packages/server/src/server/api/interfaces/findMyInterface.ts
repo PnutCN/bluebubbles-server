@@ -1,9 +1,11 @@
 import { Server } from "@server";
 import path from "path";
 import fs from "fs";
+import * as base64 from "byte-base64";
 import { FileSystem } from "@server/fileSystem";
 import { isMinBigSur, isMinSonoma14_4 } from "@server/env";
 import { checkPrivateApiStatus, waitMs } from "@server/helpers/utils";
+import { ContactsLib } from "@server/api/lib/ContactsLib";
 import { quitFindMyFriends, startFindMyFriends, showFindMyFriends, hideFindMyFriends } from "../apple/scripts";
 import { FindMyDevice, FindMyItem, FindMyLocationItem } from "@server/api/lib/findmy/types";
 import { transformFindMyItemToDevice } from "@server/api/lib/findmy/utils";
@@ -201,7 +203,57 @@ export class FindMyInterface {
             }
         }
 
-        return rawLocations.map(raw => FindMyInterface.buildFriendLocationItem(raw, names));
+        const items = rawLocations.map(raw => FindMyInterface.buildFriendLocationItem(raw, names));
+        FindMyInterface.attachFriendAvatars(items);
+        return items;
+    }
+
+    /**
+     * Attaches contact photos to friend items (Find My displays the linked contact's
+     * photo). Matches each friend's handle against every contact's emails (exact,
+     * case-insensitive) or phones (digit-suffix), and prefers image-bearing records:
+     * people often have duplicate contacts and only one carries the photo.
+     * Thumbnails are preferred to keep API payloads small. Best-effort: without
+     * Contacts permission, or when no matching contact has an image, `avatar` is null.
+     */
+    private static attachFriendAvatars(items: FindMyLocationItem[]): void {
+        const handled = items.filter(item => item.handle);
+        if (handled.length === 0) return;
+
+        try {
+            // Raw native records: emailAddresses/phoneNumbers are plain string arrays
+            const contacts = ContactsLib.getAllContacts(["contactThumbnailImage", "contactImage"]);
+            Server().logger.debug(
+                `FindMy avatars: auth=${ContactsLib.getAuthStatus()}, loaded ${contacts?.length ?? 0} contacts`
+            );
+            if (!contacts || contacts.length === 0) return;
+
+            for (const item of handled) {
+                const handle = item.handle.toLowerCase();
+                const isEmail = handle.includes("@");
+                const digits = handle.replace(/\D/g, "");
+
+                let matches = 0;
+                let bestImage: Buffer | null = null;
+                for (const contact of contacts) {
+                    const emails = (contact?.emailAddresses ?? []).map((e: any) => String(e ?? "").toLowerCase());
+                    const phones = (contact?.phoneNumbers ?? []).map((p: any) => String(p ?? ""));
+                    const hit = isEmail
+                        ? emails.includes(handle)
+                        : digits.length >= 7 && phones.some((p: string) => p.replace(/\D/g, "").endsWith(digits));
+                    if (!hit) continue;
+                    matches++;
+
+                    const image = contact?.contactThumbnailImage ?? contact?.contactImage;
+                    if (image && image.length > (bestImage?.length ?? 0)) bestImage = image;
+                }
+
+                Server().logger.debug(`FindMy avatars: ${handle} matched ${matches} contacts, image ${bestImage?.length ?? 0} bytes`);
+                if (bestImage) item.avatar = base64.bytesToBase64(bestImage);
+            }
+        } catch (ex: any) {
+            Server().logger.debug(`Failed to attach FindMy friend avatars: ${String(ex)}`);
+        }
     }
 
     private static buildFriendLocationItem(
@@ -238,7 +290,8 @@ export class FindMyInterface {
             title,
             last_updated: lastUpdated,
             is_locating_in_progress: false,
-            status: hasCoords ? "live" : "shallow"
+            status: hasCoords ? "live" : "shallow",
+            avatar: null
         };
     }
 
