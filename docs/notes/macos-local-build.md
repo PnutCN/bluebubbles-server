@@ -20,15 +20,10 @@ npm install                 # also rebuilds native modules for Electron via post
 npm run build-ui            # React UI -> packages/server/dist
 cd packages/server
 npm run build               # webpack -> dist/main.js
-CSC_IDENTITY_AUTO_DISCOVERY=false \
-    ../../node_modules/.bin/electron-builder build --mac --dir \
+../../node_modules/.bin/electron-builder build --mac --dir \
     --config ./scripts/electron-builder-config.js
 # output: packages/server/releases/mac/BlueBubbles.app
 ```
-
-`CSC_IDENTITY_AUTO_DISCOVERY=false` matters once any codesigning identity exists in
-the keychains (e.g. the self-signed one below): electron-builder otherwise finds it,
-tries to sign the bundle with it, and fails. Build unsigned, sign manually after.
 
 The `--dir` target skips the DMG and just produces the .app, which is all a local
 install needs.
@@ -103,14 +98,6 @@ killall tccd   # flush the TCC cache
 A fresh install that never had the grants can skip the sqlite part; the app will prompt
 once per permission and the grants will stick across rebuilds from then on.
 
-Note: on macOS 14.8.5 the hand-patched csreq has been seen reverting to an older value
-days later (cause not pinned down; possibly tccd rewriting it on app replacement). If
-permissions silently drop after a redeploy despite stable signing, the tell is
-`auth=Not Determined` in the server log when contacts are read: re-run the re-point
-block and restart the app. The durable fix is one interactive grant (click Allow on the
-Contacts prompt once) with the cert-signed build, which then binds to the certificate
-requirement and survives rebuilds without any sqlite work.
-
 ## Find My decryption keys
 
 On macOS 14.4+ the server reads Find My data by decrypting the on-disk caches. Keys
@@ -150,26 +137,7 @@ set it in the LaunchAgent so it survives reboots:
 ## Running
 
 The app expects macOS to launch it (login item or a LaunchAgent running the binary
-directly).
-
-### Standalone Find My viewer
-
-`GET /findmy` serves a self-contained Find My web viewer (map + friend list, avatars,
-addresses via OpenStreetMap Nominatim from the viewing device, 60s auto-refresh). It is
-reachable anywhere the API is, e.g. `https://<your-tunnel-or-host>/findmy`, and asks for
-the server password on first open (stored in localStorage).
-
-The route serves `findmy-viewer.html` from the app-support dir
-(`~/Library/Application Support/bluebubbles-server/`), so the page can be edited without
-a rebuild. The canonical copy lives at `packages/server/web/findmy-viewer.html`; after
-installing a new build, copy it over:
-
-```sh
-cp packages/server/web/findmy-viewer.html \
-    ~/Library/Application\ Support/bluebubbles-server/findmy-viewer.html
-```
-
-Verify the friends endpoint after a refresh:
+directly). Verify the friends endpoint after a refresh:
 
 ```sh
 curl -X POST "http://localhost:1234/api/v1/icloud/findmy/friends/refresh?guid=<server-password>"

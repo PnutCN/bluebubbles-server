@@ -708,11 +708,6 @@ export class HttpRoutes {
                         method: HttpMethod.GET,
                         path: "/",
                         controller: UiRouter.index
-                    },
-                    {
-                        method: HttpMethod.GET,
-                        path: "/findmy",
-                        controller: UiRouter.findMyViewer
                     }
                 ]
             }
