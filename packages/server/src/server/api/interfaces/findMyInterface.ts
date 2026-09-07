@@ -14,6 +14,7 @@ import { decryptCacheBuffer } from "@server/api/lib/findmy/decrypt/cache";
 import { readFriendLocations, RawFriendLocation } from "@server/api/lib/findmy/decrypt/localStorageReader";
 import { readSearchPartyFriendLocations } from "@server/api/lib/findmy/decrypt/searchPartyReader";
 import { readFmfContacts } from "@server/api/lib/findmy/decrypt/fmfReader";
+import { readSharedPhoto } from "@server/api/lib/findmy/nicknamePhotos";
 
 export class FindMyInterface {
     static async getFriends() {
@@ -204,7 +205,7 @@ export class FindMyInterface {
         }
 
         const items = rawLocations.map(raw => FindMyInterface.buildFriendLocationItem(raw, names));
-        FindMyInterface.attachFriendAvatars(items);
+        await FindMyInterface.attachFriendAvatars(items);
         return items;
     }
 
@@ -213,17 +214,18 @@ export class FindMyInterface {
      * photo). Matches each friend's handle against every contact's emails (exact,
      * case-insensitive) or phones (digit-suffix), and prefers image-bearing records:
      * people often have duplicate contacts and only one carries the photo.
-     * Thumbnails are preferred to keep API payloads small. Best-effort: without
-     * Contacts permission, or when no matching contact has an image, `avatar` is null.
+     * Thumbnails are preferred to keep API payloads small. Friends whose Contacts card
+     * has no local image fall back to their iMessage shared "Name & Photo" cache —
+     * the photo Find My itself renders (Contacts only stores a hash for those).
+     * Best-effort: without the relevant permissions, `avatar` stays null.
      */
-    private static attachFriendAvatars(items: FindMyLocationItem[]): void {
+    private static async attachFriendAvatars(items: FindMyLocationItem[]): Promise<void> {
         const handled = items.filter(item => item.handle);
         if (handled.length === 0) return;
 
         try {
             // Raw native records: emailAddresses/phoneNumbers are plain string arrays
-            const contacts = ContactsLib.getAllContacts(["contactThumbnailImage", "contactImage"]);
-            if (!contacts || contacts.length === 0) return;
+            const contacts = ContactsLib.getAllContacts(["contactThumbnailImage", "contactImage"]) ?? [];
 
             for (const item of handled) {
                 const handle = item.handle.toLowerCase();
@@ -247,6 +249,12 @@ export class FindMyInterface {
             }
         } catch (ex: any) {
             Server().logger.debug(`Failed to attach FindMy friend avatars: ${String(ex)}`);
+        }
+
+        const missing = handled.filter(item => !item.avatar);
+        for (const item of missing) {
+            const photo = await readSharedPhoto(item.handle!);
+            if (photo) item.avatar = base64.bytesToBase64(photo);
         }
     }
 
