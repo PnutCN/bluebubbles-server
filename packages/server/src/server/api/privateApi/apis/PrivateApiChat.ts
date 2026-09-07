@@ -62,10 +62,12 @@ export class PrivateApiChat extends PrivateApiAction {
         return this.sendApiMessage(action, { chatGuid });
     }
 
-    async markRead(chatGuid: string): Promise<TransactionResult> {
+    async markRead(chatGuid: string, suppressReceipt = false): Promise<TransactionResult> {
         const action = "mark-chat-read";
         this.throwForNoMissingFields(action, [chatGuid]);
-        return this.sendApiMessage(action, { chatGuid });
+        // Await the helper's ack so callers know the read actually happened
+        const request = new TransactionPromise(TransactionType.CHAT);
+        return this.sendApiMessage(action, { chatGuid, suppressReceipt }, request);
     }
 
     async markUnread(chatGuid: string) {

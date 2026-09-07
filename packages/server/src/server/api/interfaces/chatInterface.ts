@@ -452,8 +452,8 @@ export class ChatInterface {
         await Server().privateApi.chat.leave(theChat.guid);
     }
 
-    static async markRead(chatGuid: string): Promise<void> {
-        await Server().privateApi.chat.markRead(chatGuid);
+    static async markRead(chatGuid: string, suppressReceipt = false): Promise<void> {
+        await Server().privateApi.chat.markRead(chatGuid, suppressReceipt);
         await Server().emitMessage(CHAT_READ_STATUS_CHANGED, {
             chatGuid,
             read: true
