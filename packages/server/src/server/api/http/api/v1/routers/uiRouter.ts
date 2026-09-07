@@ -1,8 +1,10 @@
 import fs from "fs";
+import path from "path";
 import { Next } from "koa";
 import { RouterContext } from "koa-router";
 import { HTML } from "../responses/success";
 import { Server } from "@server";
+import { FileSystem } from "@server/fileSystem";
 import { isEmpty } from "@server/helpers/utils";
 
 export class UiRouter {
@@ -40,6 +42,32 @@ export class UiRouter {
                 </html>
             `
         ).send();
-        
+
+    }
+
+    /**
+     * Serves the standalone Find My viewer (a single self-contained HTML page).
+     * The page holds no data itself; it calls the guid-authenticated friends API
+     * at runtime. The file lives outside the app bundle so it can be edited
+     * without a rebuild. Canonical copy: packages/server/web/findmy-viewer.html.
+     */
+    static async findMyViewer(ctx: RouterContext, _: Next) {
+        const viewerPath = path.join(FileSystem.baseDir, "findmy-viewer.html");
+        if (fs.existsSync(viewerPath)) {
+            return new HTML(ctx, fs.readFileSync(viewerPath, "utf8")).send();
+        }
+
+        return new HTML(
+            ctx,
+            `
+                <html>
+                    <title>Find My</title>
+                    <body>
+                        <h4>Find My viewer is not installed.</h4>
+                        <p>Drop findmy-viewer.html into ${FileSystem.baseDir} and reload this page.</p>
+                    </body>
+                </html>
+            `
+        ).send();
     }
 }
