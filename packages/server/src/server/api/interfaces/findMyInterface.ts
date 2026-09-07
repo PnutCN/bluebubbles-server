@@ -223,9 +223,6 @@ export class FindMyInterface {
         try {
             // Raw native records: emailAddresses/phoneNumbers are plain string arrays
             const contacts = ContactsLib.getAllContacts(["contactThumbnailImage", "contactImage"]);
-            Server().logger.debug(
-                `FindMy avatars: auth=${ContactsLib.getAuthStatus()}, loaded ${contacts?.length ?? 0} contacts`
-            );
             if (!contacts || contacts.length === 0) return;
 
             for (const item of handled) {
@@ -233,22 +230,19 @@ export class FindMyInterface {
                 const isEmail = handle.includes("@");
                 const digits = handle.replace(/\D/g, "");
 
-                let matches = 0;
                 let bestImage: Buffer | null = null;
                 for (const contact of contacts) {
                     const emails = (contact?.emailAddresses ?? []).map((e: any) => String(e ?? "").toLowerCase());
                     const phones = (contact?.phoneNumbers ?? []).map((p: any) => String(p ?? ""));
-                    const hit = isEmail
+                    const matches = isEmail
                         ? emails.includes(handle)
                         : digits.length >= 7 && phones.some((p: string) => p.replace(/\D/g, "").endsWith(digits));
-                    if (!hit) continue;
-                    matches++;
+                    if (!matches) continue;
 
                     const image = contact?.contactThumbnailImage ?? contact?.contactImage;
                     if (image && image.length > (bestImage?.length ?? 0)) bestImage = image;
                 }
 
-                Server().logger.debug(`FindMy avatars: ${handle} matched ${matches} contacts, image ${bestImage?.length ?? 0} bytes`);
                 if (bestImage) item.avatar = base64.bytesToBase64(bestImage);
             }
         } catch (ex: any) {
@@ -291,7 +285,8 @@ export class FindMyInterface {
             last_updated: lastUpdated,
             is_locating_in_progress: false,
             status: hasCoords ? "live" : "shallow",
-            avatar: null
+            avatar: null,
+            accuracy: typeof loc.horizontalAccuracy === "number" ? loc.horizontalAccuracy : null
         };
     }
 
