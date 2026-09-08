@@ -18,12 +18,13 @@ import {
 } from '../../utils/IpcUtils';
 import { showSuccessToast, showErrorToast } from '../../utils/ToastUtils';
 
-type KeyType = 'LocalStorage' | 'FMIP' | 'FMF';
+type KeyType = 'LocalStorage' | 'FMIP' | 'FMF' | 'SearchParty';
 
 const KEY_LABELS: Record<KeyType, string> = {
     LocalStorage: 'Friend Locations (LocalStorage.key)',
     FMIP: 'Devices & Items (FMIPDataManager.bplist)',
-    FMF: 'Friend Names (FMFDataManager.bplist)'
+    FMF: 'Friend Names (FMFDataManager.bplist)',
+    SearchParty: 'Friend Locations Fallback (SearchParty.key)'
 };
 
 const KeyBadge = ({ label, status }: { label: string; status?: { present: boolean; valid: boolean } }): JSX.Element => {
@@ -103,6 +104,7 @@ export const FindMyKeysField = (): JSX.Element => {
                     <KeyBadge label={KEY_LABELS.LocalStorage} status={status?.LocalStorage} />
                     <KeyBadge label={KEY_LABELS.FMIP} status={status?.FMIP} />
                     <KeyBadge label={KEY_LABELS.FMF} status={status?.FMF} />
+                    <KeyBadge label={KEY_LABELS.SearchParty} status={status?.SearchParty} />
                 </Stack>
                 <Button size='xs' mt={3} onClick={onImport} isLoading={importing}>
                     Import Keys from Folder
@@ -110,7 +112,7 @@ export const FindMyKeysField = (): JSX.Element => {
                 <FormHelperText>
                     <Text>
                         On macOS 14.4+, Apple encrypts the Find My location cache. BlueBubbles needs the
-                        three decryption keys to read device and friend locations without code injection.
+                        decryption keys to read device and friend locations without code injection.
                         Extract them with{' '}
                         <Link
                             color='blue.500'
@@ -120,7 +122,9 @@ export const FindMyKeysField = (): JSX.Element => {
                             findmy-key-extractor
                         </Link>
                         , then click the button above and select the generated <b>keys</b> folder. The keys are
-                        stable across reboots, so you only need to import them once.
+                        stable across reboots, so you only need to import them once. The SearchParty key can
+                        also be supplied via the <b>FINDMY_SEARCHPARTY_KEY</b> environment variable (hex-encoded)
+                        instead of the key file.
                     </Text>
                 </FormHelperText>
             </FormControl>

@@ -1,16 +1,20 @@
 import { Server } from "@server";
 import path from "path";
 import fs from "fs";
+import * as base64 from "byte-base64";
 import { FileSystem } from "@server/fileSystem";
 import { isMinBigSur, isMinSonoma14_4 } from "@server/env";
 import { checkPrivateApiStatus, waitMs } from "@server/helpers/utils";
+import { ContactsLib } from "@server/api/lib/ContactsLib";
 import { quitFindMyFriends, startFindMyFriends, showFindMyFriends, hideFindMyFriends } from "../apple/scripts";
 import { FindMyDevice, FindMyItem, FindMyLocationItem } from "@server/api/lib/findmy/types";
 import { transformFindMyItemToDevice } from "@server/api/lib/findmy/utils";
 import { FindMyKeyManager } from "@server/api/lib/findmy/FindMyKeyManager";
 import { decryptCacheBuffer } from "@server/api/lib/findmy/decrypt/cache";
 import { readFriendLocations, RawFriendLocation } from "@server/api/lib/findmy/decrypt/localStorageReader";
+import { readSearchPartyFriendLocations } from "@server/api/lib/findmy/decrypt/searchPartyReader";
 import { readFmfContacts } from "@server/api/lib/findmy/decrypt/fmfReader";
+import { readSharedPhoto } from "@server/api/lib/findmy/nicknamePhotos";
 
 export class FindMyInterface {
     static async getFriends() {
@@ -165,18 +169,29 @@ export class FindMyInterface {
      * with the FMF cache (display names). Returns items in the legacy API shape.
      */
     static async readFriendsFromCache(): Promise<FindMyLocationItem[]> {
+        let rawLocations: RawFriendLocation[] = [];
+
         const localStorageKey = FindMyKeyManager.loadLocalStorageKey();
         if (!localStorageKey) {
             Server().logger.debug("FindMy LocalStorage key not imported — cannot read friend locations.");
-            return [];
-        }
-
-        if (!fs.existsSync(FileSystem.findMyLocalStorageDbPath)) {
+        } else if (!fs.existsSync(FileSystem.findMyLocalStorageDbPath)) {
             Server().logger.debug(`FindMy LocalStorage.db not found at ${FileSystem.findMyLocalStorageDbPath}`);
-            return [];
+        } else {
+            rawLocations = readFriendLocations(localStorageKey);
         }
 
-        const rawLocations = readFriendLocations(localStorageKey);
+        // Some macOS 14.4+ builds keep friend coordinates only in the searchpartyd
+        // secure-location store (LocalStorage.db has no `secureLocations` table).
+        if (rawLocations.length === 0) {
+            const searchPartyKey = FindMyKeyManager.loadSearchPartyKey();
+            if (searchPartyKey) {
+                try {
+                    rawLocations = await readSearchPartyFriendLocations(searchPartyKey);
+                } catch (ex: any) {
+                    Server().logger.debug(`Failed to read searchpartyd friend locations: ${String(ex)}`);
+                }
+            }
+        }
 
         // Best-effort: pull friend display names from the FMF cache
         let names: Record<string, string> = {};
@@ -189,7 +204,58 @@ export class FindMyInterface {
             }
         }
 
-        return rawLocations.map(raw => FindMyInterface.buildFriendLocationItem(raw, names));
+        const items = rawLocations.map(raw => FindMyInterface.buildFriendLocationItem(raw, names));
+        await FindMyInterface.attachFriendAvatars(items);
+        return items;
+    }
+
+    /**
+     * Attaches contact photos to friend items (Find My displays the linked contact's
+     * photo). Matches each friend's handle against every contact's emails (exact,
+     * case-insensitive) or phones (digit-suffix), and prefers image-bearing records:
+     * people often have duplicate contacts and only one carries the photo.
+     * Thumbnails are preferred to keep API payloads small. Friends whose Contacts card
+     * has no local image fall back to their iMessage shared "Name & Photo" cache —
+     * the photo Find My itself renders (Contacts only stores a hash for those).
+     * Best-effort: without the relevant permissions, `avatar` stays null.
+     */
+    private static async attachFriendAvatars(items: FindMyLocationItem[]): Promise<void> {
+        const handled = items.filter(item => item.handle);
+        if (handled.length === 0) return;
+
+        try {
+            // Raw native records: emailAddresses/phoneNumbers are plain string arrays
+            const contacts = ContactsLib.getAllContacts(["contactThumbnailImage", "contactImage"]) ?? [];
+
+            for (const item of handled) {
+                const handle = item.handle.toLowerCase();
+                const isEmail = handle.includes("@");
+                const digits = handle.replace(/\D/g, "");
+
+                let bestImage: Buffer | null = null;
+                for (const contact of contacts) {
+                    const emails = (contact?.emailAddresses ?? []).map((e: any) => String(e ?? "").toLowerCase());
+                    const phones = (contact?.phoneNumbers ?? []).map((p: any) => String(p ?? ""));
+                    const matches = isEmail
+                        ? emails.includes(handle)
+                        : digits.length >= 7 && phones.some((p: string) => p.replace(/\D/g, "").endsWith(digits));
+                    if (!matches) continue;
+
+                    const image = contact?.contactThumbnailImage ?? contact?.contactImage;
+                    if (image && image.length > (bestImage?.length ?? 0)) bestImage = image;
+                }
+
+                if (bestImage) item.avatar = base64.bytesToBase64(bestImage);
+            }
+        } catch (ex: any) {
+            Server().logger.debug(`Failed to attach FindMy friend avatars: ${String(ex)}`);
+        }
+
+        const missing = handled.filter(item => !item.avatar);
+        for (const item of missing) {
+            const photo = await readSharedPhoto(item.handle!);
+            if (photo) item.avatar = base64.bytesToBase64(photo);
+        }
     }
 
     private static buildFriendLocationItem(
@@ -226,7 +292,9 @@ export class FindMyInterface {
             title,
             last_updated: lastUpdated,
             is_locating_in_progress: false,
-            status: hasCoords ? "live" : "shallow"
+            status: hasCoords ? "live" : "shallow",
+            avatar: null,
+            accuracy: typeof loc.horizontalAccuracy === "number" ? loc.horizontalAccuracy : null
         };
     }
 

@@ -127,6 +127,10 @@ export class FileSystem {
 
     public static findMyLocalStorageDbPath = path.join(FileSystem.findMyLocalStorageDir, "LocalStorage.db");
 
+    // searchpartyd secure-location store: holds friend coordinates on macOS builds where
+    // LocalStorage.db has no `secureLocations` table (observed on 14.8.x)
+    public static searchPartyDir = path.join(userHomeDir(), "Library", "com.apple.icloud.searchpartyd");
+
     // Where BlueBubbles stores the user-imported Find My decryption keys
     public static findMyKeysDir = path.join(FileSystem.baseDir, "FindMyKeys");
 
@@ -566,11 +570,22 @@ export class FileSystem {
 
     static async convertToJpg(originalPath: string, outputPath: string): Promise<void> {
         const oldPath = FileSystem.getRealPath(originalPath);
-        const output = await FileSystem.execShellCommand(
-            `/usr/bin/sips --setProperty "format" "jpeg" "${oldPath}" --out "${outputPath}"`
-        );
-        if (isNotEmpty(output) && output.includes("Error:")) {
-            throw Error(`Failed to convert image to JPEG: ${output}`);
+        try {
+            await FileSystem.execShellCommand(
+                `/usr/bin/sips --setProperty "format" "jpeg" "${oldPath}" --out "${outputPath}"`
+            );
+            return;
+        } catch {
+            // macOS 14.8's JPEG encoder rejects some HEICs (Error 13) that convert
+            // fine through a PNG intermediate; fall back to a two-pass conversion.
+        }
+
+        const tmpPng = `${outputPath}.tmp.png`;
+        try {
+            await FileSystem.execShellCommand(`/usr/bin/sips -s format png "${oldPath}" --out "${tmpPng}"`);
+            await FileSystem.execShellCommand(`/usr/bin/sips -s format jpeg "${tmpPng}" --out "${outputPath}"`);
+        } finally {
+            await FileSystem.execShellCommand(`/bin/rm -f "${tmpPng}"`);
         }
     }
 

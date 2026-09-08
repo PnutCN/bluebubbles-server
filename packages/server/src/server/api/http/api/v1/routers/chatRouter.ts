@@ -240,7 +240,9 @@ export class ChatRouter {
 
     static async markRead(ctx: RouterContext, _: Next): Promise<void> {
         const { guid } = ctx.params;
-        await ChatInterface.markRead(guid);
+        // receipt=false marks read without sending a read receipt to the sender
+        const suppressReceipt = String(ctx.request.query.receipt ?? "") === "false";
+        await ChatInterface.markRead(guid, suppressReceipt);
         return new Success(ctx, { message: "Successfully marked chat as read!" }).send();
     }
 

@@ -30,6 +30,7 @@ export type FindMyKeysStatus = {
     LocalStorage: FindMyKeyStatus;
     FMIP: FindMyKeyStatus;
     FMF: FindMyKeyStatus;
+    SearchParty: FindMyKeyStatus;
 };
 
 export const getFindMyKeysStatus = async (): Promise<FindMyKeysStatus> => {

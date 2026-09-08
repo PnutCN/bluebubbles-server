@@ -5,14 +5,16 @@ import { FileSystem } from "@server/fileSystem";
 import { parsePlistFile, extractSymmetricKey } from "./decrypt/plistUtils";
 import { decryptLocalStorageDb } from "./decrypt/localStorage";
 import { decryptCacheBuffer } from "./decrypt/cache";
+import { decryptSearchPartyRecord } from "./decrypt/searchPartyReader";
 
-export type FindMyKeyType = "LocalStorage" | "FMIP" | "FMF";
+export type FindMyKeyType = "LocalStorage" | "FMIP" | "FMF" | "SearchParty";
 
 /** Canonical file names for each key, as produced by findmy-key-extractor. */
 export const FIND_MY_KEY_FILES: Record<FindMyKeyType, string> = {
     LocalStorage: "LocalStorage.key",
     FMIP: "FMIPDataManager.bplist",
-    FMF: "FMFDataManager.bplist"
+    FMF: "FMFDataManager.bplist",
+    SearchParty: "SearchParty.key"
 };
 
 export type FindMyKeyStatus = {
@@ -24,10 +26,13 @@ export type FindMyKeyStatus = {
 
 export type FindMyKeysStatus = Record<FindMyKeyType, FindMyKeyStatus>;
 
+/** Env var holding the hex-encoded SearchParty master key (alternative to the key file). */
+const SEARCH_PARTY_KEY_ENV = "FINDMY_SEARCHPARTY_KEY";
+
 export type KeyImportResult = "imported" | "invalid" | "missing";
 
 /**
- * Loads, validates, caches, and imports the three Find My decryption keys.
+ * Loads, validates, caches, and imports the Find My decryption keys.
  *
  * Keys are stored in `FileSystem.findMyKeysDir` and are stable across reboots
  * (derived from the user's iCloud account), so they only need to be imported once.
@@ -64,6 +69,40 @@ export class FindMyKeyManager {
     }
 
     /**
+     * Loads and returns the 32-byte searchpartyd master key, or null if unavailable.
+     * Used when friend coordinates live in the secure-location store rather than
+     * LocalStorage.db.
+     *
+     * The env var (64 hex chars) takes precedence over the key file — useful for
+     * headless/launchd deployments where the key shouldn't sit in the keys directory.
+     */
+    static loadSearchPartyKey(): Buffer | null {
+        if (this.cache.SearchParty) return this.cache.SearchParty;
+
+        const fromEnv = process.env[SEARCH_PARTY_KEY_ENV];
+        if (fromEnv && fromEnv.trim().length > 0) {
+            const key = Buffer.from(fromEnv.trim(), "hex");
+            if (key.length === 32) {
+                this.cache.SearchParty = key;
+                return key;
+            }
+            Server().logger.debug(`Invalid ${SEARCH_PARTY_KEY_ENV}: expected 64 hex characters (32 bytes)`);
+        }
+
+        const keyPath = this.keyPath("SearchParty");
+        if (!fs.existsSync(keyPath)) return null;
+
+        const key = fs.readFileSync(keyPath);
+        if (key.length !== 32) {
+            Server().logger.debug(`Invalid SearchParty key length: ${key.length} bytes, expected 32`);
+            return null;
+        }
+
+        this.cache.SearchParty = key;
+        return key;
+    }
+
+    /**
      * Loads and returns a 32-byte ChaCha20 cache key (FMIP or FMF), or null if unavailable.
      */
     static async loadCacheKey(type: "FMIP" | "FMF"): Promise<Buffer | null> {
@@ -89,18 +128,24 @@ export class FindMyKeyManager {
     }
 
     /**
-     * Returns presence/validity for all three keys (used by the UI status card).
+     * Returns presence/validity for all keys (used by the UI status card).
      */
     static async getStatus(): Promise<FindMyKeysStatus> {
         const status = {} as FindMyKeysStatus;
 
         for (const type of Object.keys(FIND_MY_KEY_FILES) as FindMyKeyType[]) {
-            const present = fs.existsSync(this.keyPath(type));
+            const present =
+                fs.existsSync(this.keyPath(type)) ||
+                (type === "SearchParty" && Boolean(process.env[SEARCH_PARTY_KEY_ENV]?.trim()));
             let valid = false;
             if (present) {
                 try {
                     const key =
-                        type === "LocalStorage" ? this.loadLocalStorageKey() : await this.loadCacheKey(type);
+                        type === "LocalStorage"
+                            ? this.loadLocalStorageKey()
+                            : type === "SearchParty"
+                            ? this.loadSearchPartyKey()
+                            : await this.loadCacheKey(type);
                     valid = key != null;
                 } catch {
                     valid = false;
@@ -120,6 +165,8 @@ export class FindMyKeyManager {
      *   to a valid SQLite header.
      * - FMIP/FMF: bplist must yield a 32-byte symmetric key; if a matching cache file is
      *   present, it must decrypt (Poly1305 tag verifies correctness).
+     * - SearchParty: 32 raw bytes; if a secure-location record is present, it must
+     *   decrypt (GCM tag verifies correctness).
      */
     static async validateKeyFile(type: FindMyKeyType, filePath: string): Promise<boolean> {
         try {
@@ -130,6 +177,22 @@ export class FindMyKeyManager {
                 // Deep check against real data when available
                 if (fs.existsSync(FileSystem.findMyLocalStorageDbPath)) {
                     decryptLocalStorageDb(key, FileSystem.findMyLocalStorageDbPath);
+                }
+                return true;
+            }
+
+            if (type === "SearchParty") {
+                const key = fs.readFileSync(filePath);
+                if (key.length !== 32) return false;
+
+                // Deep check: decrypt a real secure-location record if one exists
+                const cacheDir = path.join(FileSystem.searchPartyDir, "SecureLocationCache");
+                const record = fs.existsSync(cacheDir)
+                    ? fs.readdirSync(cacheDir).find(f => f.endsWith(".record"))
+                    : null;
+                if (record) {
+                    const decrypted = await decryptSearchPartyRecord(path.join(cacheDir, record), key);
+                    if (decrypted?.secureLocation == null) return false;
                 }
                 return true;
             }
